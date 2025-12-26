@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ZüriPark Mobile</title>
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+    <style>
+        :root { --primary-color: #007aff; --light-gray: #f2f2f7; }
+        body { margin: 0; font-family: -apple-system, sans-serif; overscroll-behavior: none; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        .top-panel { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 10; background: white; padding: 10px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .search-box { display: flex; gap: 8px; }
+        input { flex: 1; padding: 10px; border: 1px solid #e5e5ea; border-radius: 8px; font-size: 16px; }
+        button { padding: 0 15px; background: var(--primary-color); color: white; border: none; border-radius: 8px; height: 44px; font-weight: bold; }
+        #results-drawer { position: absolute; bottom: 0; left: 0; right: 0; z-index: 10; background: white; max-height: 50vh; transform: translateY(calc(100% - 45px)); transition: transform 0.3s; border-radius: 16px 16px 0 0; box-shadow: 0 -4px 15px rgba(0,0,0,0.1); display: flex; flex-direction: column; }
+        #results-drawer.open { transform: translateY(0); }
+        #drawer-handle { padding: 12px; text-align: center; background: var(--light-gray); border-radius: 16px 16px 0 0; color: #888; cursor: pointer; }
+        .parking-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; }
+        .parking-list li { padding: 15px; border-bottom: 1px solid #e5e5ea; }
+    </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="top-panel">
+    <div class="search-box">
+        <input type="text" id="target" placeholder="Zieladresse...">
+        <button onclick="findDestination()">Go</button>
+    </div>
+</div>
+<div id="results-drawer">
+    <div id="drawer-handle" onclick="toggleDrawer()">☰ Liste anzeigen ☰</div>
+    <ul id="parking-list" class="parking-list"></ul>
+</div>
+
+<script>
+    let allParkingData = [];
+    let destinationCoords = null;
+
+    const map = new maplibregl.Map({
+        container: 'map',
+        style: 'https://api.maptiler.com/maps/streets-v2/style.json?key=doCWyiHfEm3dJOIMdhuN',
+        center: [8.5417, 47.3769],
+        zoom: 14
+    });
+
+    map.on('load', async () => {
+        try {
+            // LÄDT DIE DATEN DIREKT VOM GITHUB-ORDNER
+            const res = await fetch('data.json');
+            const data = await res.json();
+            allParkingData = data.features;
+            
+            map.addSource('pp', { 
+                type: 'geojson', 
+                data: data, 
+                cluster: true, 
+                clusterMaxZoom: 14, 
+                clusterRadius: 50 
+            });
+
+            map.addLayer({
+                id: 'unclustered',
+                type: 'circle',
+                source: 'pp',
+                filter: ['!', ['has', 'point_count']],
+                paint: {
+                    'circle-radius': 8,
+                    'circle-color': ['match', ['get', 'gebuehrenpflichtig_bezeichnung'], 'Ja', '#ff3b30', '#34c759', '#8e8e93'],
+                    'circle-stroke-width': 2,
+                    'circle-stroke-color': '#fff'
+                }
+            });
+        } catch (e) { alert("Fehler beim Laden der data.json von GitHub!"); }
+    });
+
+    async function findDestination() {
+        const val = document.getElementById('target').value;
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(val + ', Zürich')}`);
+        const data = await res.json();
+        if(data[0]) {
+            destinationCoords = [parseFloat(data[0].lon), parseFloat(data[0].lat)];
+            map.flyTo({ center: destinationCoords, zoom: 16 });
+            updateList();
+        }
+    }
+
+    function updateList() {
+        const list = document.getElementById('parking-list');
+        list.innerHTML = '';
+        const sorted = allParkingData
+            .map(p => ({ ...p, dist: getDistance(destinationCoords, p.geometry.coordinates) }))
+            .sort((a, b) => a.dist - b.dist)
+            .slice(0, 20);
+
+        sorted.forEach(p => {
+            const li = document.createElement('li');
+            li.innerHTML = `<b>${p.properties.bezeichnung || 'Parkplatz'}</b><br>🚶 ${Math.round(p.dist)}m | ${p.properties.gebuehrenpflichtig_bezeichnung === 'Ja' ? '💰 Gebühr' : '✅ Gratis'}`;
+            li.onclick = () => { 
+                map.flyTo({ center: p.geometry.coordinates, zoom: 18 }); 
+                toggleDrawer();
+            };
+            list.appendChild(li);
+        });
+        document.getElementById('results-drawer').classList.add('open');
+    }
+
+    function getDistance(c1, c2) {
+        const R = 6371e3;
+        const dLat = (c2[1]-c1[1])*Math.PI/180;
+        const dLon = (c2[0]-c1[0])*Math.PI/180;
+        const a = Math.sin(dLat/2)**2 + Math.cos(c1[1]*Math.PI/180)*Math.cos(c2[1]*Math.PI/180)*Math.sin(dLon/2)**2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+    function toggleDrawer() { document.getElementById('results-drawer').classList.toggle('open'); }
+</script>
+</body>
+</html> 
